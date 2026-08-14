@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run balanced AnonLib vs NeMo Curator/Data Designer repetitions."""
+"""Run balanced AnonLib, NeMo Curator/Data Designer, and DataTrove repetitions."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_ORDER = ["anonlib", "nemo", "nemo", "anonlib", "anonlib", "nemo"]
+DEFAULT_ORDER = ["anonlib", "nemo", "datatrove", "datatrove", "nemo", "anonlib", "anonlib", "nemo", "datatrove"]
 DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 EXPERIMENT_DIR = Path("experiments/nemo_curator_comparison")
 
@@ -29,11 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--anonlib-start-rep", type=int, default=1)
     parser.add_argument("--nemo-start-rep", type=int, default=1)
+    parser.add_argument("--datatrove-start-rep", type=int, default=1)
     parser.add_argument("--order", default=",".join(DEFAULT_ORDER))
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default="http://127.0.0.1:30000/v1")
     parser.add_argument("--anonlib-python", default=sys.executable, help="Interpreter with the anonlib package (default: this interpreter).")
     parser.add_argument("--nemo-python", default=sys.executable, help="Interpreter with nemo_curator/data_designer (default: this interpreter).")
+    parser.add_argument("--datatrove-python", default=sys.executable, help="Interpreter with datatrove/vLLM (default: this interpreter).")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--concurrency", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=256)
@@ -159,6 +161,23 @@ def framework_command(framework: str, rep: int, args: argparse.Namespace, run_di
             "--max-parallel-requests",
             str(args.concurrency),
         ], env
+    if framework == "datatrove":
+        return [
+            args.datatrove_python,
+            str(EXPERIMENT_DIR / "scripts/run_datatrove_pipeline.py"),
+            "--input-jsonl",
+            str(Path(args.workload_jsonl).resolve()),
+            "--image-base-path",
+            str(Path(args.image_base_path).resolve()),
+            "--output-dir",
+            str((run_dir / "output").resolve()),
+            "--summary-json",
+            str(run_dir / "run_summary.json"),
+            "--model",
+            args.model,
+            "--max-tokens",
+            str(args.max_tokens),
+        ], env
     raise ValueError(f"Unknown framework {framework!r}")
 
 
@@ -192,8 +211,8 @@ def main() -> None:
     output_root = Path(args.output_root)
     capture_environment(output_root, args)
     requested_order = [item.strip() for item in args.order.split(",") if item.strip()]
-    starts = {"anonlib": args.anonlib_start_rep, "nemo": args.nemo_start_rep}
-    counts = {"anonlib": 0, "nemo": 0}
+    starts = {"anonlib": args.anonlib_start_rep, "nemo": args.nemo_start_rep, "datatrove": args.datatrove_start_rep}
+    counts = {"anonlib": 0, "nemo": 0, "datatrove": 0}
     results = []
     for framework in requested_order:
         if counts[framework] >= args.repetitions:

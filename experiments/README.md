@@ -15,6 +15,8 @@ Run every command from the repository root unless an experiment README says othe
 
 Each experiment README is the source of truth for commands, output locations, artifact policy, and metadata to archive.
 
+Native competitor completion settings now live inside the relevant experiment folders. `single_node_h100_scaling` plans DataTrove, NeMo Curator, Distilabel, Ray Data LLM, and raw SGLang baselines; `shard_recovery` plans DataTrove, NeMo Curator, Distilabel, and Ray Data LLM recovery-equivalent baselines; `nemo_curator_comparison` adds a DataTrove ChartQA baseline with an explicit native multimodal adapter boundary.
+
 ## Repository Policy
 
 - Keep fixed recipes and execution configs under `experiments/<name>/configs/`.
