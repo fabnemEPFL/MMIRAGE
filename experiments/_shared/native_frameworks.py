@@ -301,6 +301,7 @@ def run_distilabel(
     id_field: str = "stable_id",
 ) -> dict[str, Any]:
     """Distilabel pipeline with a native local vLLM-backed LLM task."""
+    os.environ["VLLM_USE_V1"] = "0"
     from datasets import Dataset
     from distilabel.llms import vLLM
     from distilabel.pipeline import Pipeline
@@ -323,12 +324,19 @@ def run_distilabel(
     started = time.perf_counter()
     with Pipeline() as pipeline:
         step = TextGeneration(
-            llm=vLLM(model=model, trust_remote_code=True),
+            llm=vLLM(
+                model=model,
+                trust_remote_code=True,
+                disable_cuda_device_placement=True,
+                extra_kwargs={"gpu_memory_utilization": 0.9, "max_model_len": 8192, "enforce_eager": True},
+            ),
+            template="{{ prompt }}",
             columns=["prompt"],
             output_mappings={"generation": "answer"},
         )
     distiset = pipeline.run(
         dataset=dataset,
+        use_cache=False,
         parameters={
             step.name: {
                 "llm": {"generation_kwargs": {"temperature": temperature, "max_new_tokens": max_new_tokens}},
@@ -337,8 +345,10 @@ def run_distilabel(
         },
     )
     split_name = next(iter(distiset.keys()))
+    leaf = distiset[split_name]
+    items = leaf.to_list() if hasattr(leaf, "to_list") else next(iter(leaf.values())).to_list()
     output_rows = []
-    for item in distiset[split_name].to_list():
+    for item in items:
         output_rows.append(
             {
                 id_field: item[id_field],
@@ -443,13 +453,11 @@ def run_nemo_curator(
     from nemo_curator.tasks import DocumentBatch
 
     class RewriteStage(ProcessingStage[DocumentBatch, DocumentBatch]):
+        name = "native_rewrite_llm"
+
         def __init__(self, base_url: str, api_key: str = "unused"):
             super().__init__()
-            self.client = OpenAIClient(base_url=base_url, api_key=api_key)
-
-        @property
-        def name(self) -> str:
-            return "native_rewrite_llm"
+            self.client = OpenAIClient(base_url=f"{base_url}/v1", api_key=api_key)
 
         def inputs(self) -> tuple[list[str], list[str]]:
             return ["data"], []

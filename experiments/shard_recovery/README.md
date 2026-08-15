@@ -157,6 +157,24 @@ $ANONLIB_RECOVERY_ROOT/native_competitors/<framework>/<condition>/rep_<R>/
 
 `validation.json` checks `no_missing_ids`, `no_duplicate_ids`, `no_unexpected_ids`, `order_after_merge_matches_expected`, `completed_shard_outputs_unchanged_after_retry`, and `retry_only_incomplete_or_killed_shards`. The exit code is nonzero if validation fails. Metrics for the paper (shards recomputed, rows recomputed, fraction recomputed, initial and retry wall times) are in `summary.json`.
 
+### Verification status
+
+Quick end-to-end validation ran the `fail_4` condition (shards 1, 5, 9, 13 killed with `SIGTERM` ~20 s after reporting running) for all four frameworks on a 1024-row shared root (64 rows/shard, 4 shards per wave, GPUs 0-3). All four produced `valid: true`, `final_row_count: 1024`, no missing/duplicate/unexpected ids, and correct merge order:
+
+| Framework | fail_4 result |
+|---|---|
+| DataTrove | PASS (1024 rows) |
+| NeMo Curator | PASS (1024 rows) |
+| Distilabel | PASS (1024 rows) |
+| Ray Data LLM | PASS (1024 rows) |
+
+Two harness bugs were fixed during validation:
+
+- `REPO_ROOT` in `run_native_recovery_competitor.py` was computed as `EXPERIMENT_DIR.parents[2]` (one level above the repo root), so every worker launch failed with `No such file or directory` for `native_shard_worker.py`. It is now `EXPERIMENT_DIR.parents[1]`. The `--dry-run` path does not launch workers, which is why this only appeared on a real run.
+- `experiments/_shared/io.py` shadowed the standard-library `io` module for any subprocess running with `experiments/_shared` on `PYTHONPATH`. vLLM 0.27.1's FlashInfer JIT build spawns a Python subprocess that imports `io`; it got the repo helper instead of the stdlib, crashed with `AttributeError: partially initialized module 'io' has no attribute 'open'`, and failed the ninja build (`Ninja build failed`), which failed every NeMo shard at engine warmup. The helper was renamed to `experiments/_shared/fileio.py` (nothing imports the old name).
+
+Operational note: killing a shard's process group does not always take down vLLM V1's `EngineCore` subprocess, which can keep ~77 GiB on a GPU after the controller exits. Check `nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader` between framework runs and `kill -9` any leftover `VLLM::EngineCore`/`ray::`/`sglang` processes before starting the next framework.
+
 ## 1. Create Or Confirm The PVC
 
 If your namespace and PVC already exist, skip this step after confirming the PVC is mounted at `$ANONLIB_RECOVERY_ROOT` in the controller container.

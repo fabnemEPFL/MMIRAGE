@@ -470,6 +470,18 @@ The latest recorded full run used `Qwen/Qwen2.5-VL-7B-Instruct`, 1,000 ChartQA r
 
 Exact LLM-produced normalization was imperfect. Query whitespace-normalization matched for `168/1000` AnonLib rows and `296.67 +/- 3.79/1000` NeMo rows. Lowercase answer normalization matched for `983/1000` AnonLib rows and `966.67 +/- 1.53/1000` NeMo rows. Treat these as measured consistency outcomes, not deterministic preprocessing.
 
+## Quick Validation (Small Scale)
+
+End-to-end smoke validation at reduced scale (50 ChartQA rows, `max_tokens=64`, one shared SGLang server for AnonLib+NeMo, DataTrove spawning its own vLLM 0.23 server, three reps per framework) confirmed the full run path, output materialization, and analysis pipeline. Recorded per-framework results:
+
+| Framework | Materialized rows | End-to-end wall (s) | Rows/s | Schema-valid rows |
+|---|---:|---:|---:|---:|
+| AnonLib | 50/50 | 8.41 +/- 3.50 | 6.56 +/- 2.20 | 50 |
+| NeMo Curator + Data Designer | 49/50 | 22.83 | 2.16 | 49 |
+| DataTrove | 50/50 | 99.37 | 0.59 | 50 |
+
+NeMo consistently omitted 1 of 50 rows (`chartqa-train-00000082`): its `DataDesignerStage` applies a strict `VLMResult` response schema (`rationale` required) and silently omits records whose model response fails validation. The model's answer to that query repeatedly lacked the `rationale` field. This is a measured pipeline property (see `missing_rows` in the analyzer output), not a harness bug. DataTrove is slowest at this small scale because its per-run `vllm serve` startup dominates the 50-row workload.
+
 ## Interpretation Boundary
 
 This experiment supports a controlled LLM-only framework comparison for one ChartQA transformation. It should not be generalized to all NeMo Curator or AnonLib workloads, and it should not be used as evidence that either framework is globally faster or more expressive.

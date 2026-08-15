@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -67,6 +68,7 @@ def main() -> int:
     input_path = Path(args.input_jsonl)
     output_path = Path(args.output_jsonl)
     status_path = Path(args.status_json)
+    os.environ["DISTILABEL_CACHE_DIR"] = str(output_path.parent / "distilabel_cache")
     try:
         rows = load_rows(input_path)
         write_json(status_path.with_name("running.json"), {"started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "gpu_id": args.gpu_id, "input_rows": len(rows)})

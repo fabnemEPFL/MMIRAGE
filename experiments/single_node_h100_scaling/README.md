@@ -244,9 +244,9 @@ Repeat for `distilabel`, `nemo_curator`, `ray_data_llm`, and `raw_sglang` using 
 |---|---|
 | `.venv-anonlib` | sglang 0.5.10 |
 | `.venv-datatrove` | datatrove 0.9.0, vllm 0.23.0, setuptools 75.9.1 |
-| `.venv-distilabel` | distilabel 1.5.3, vllm 0.27.1 |
+| `.venv-distilabel` | distilabel 1.5.3, vllm 0.10.2, transformers 4.57.6, beautifulsoup4 |
 | `.venv-ray` | ray 2.57.0, vllm 0.27.1 |
-| `.venv-nemo` | nemo-curator 1.3.0, ray 2.57.0 |
+| `.venv-nemo` | nemo-curator 1.3.0, ray 2.57.0, vllm 0.27.1 |
 
 Environment notes:
 
@@ -254,6 +254,8 @@ Environment notes:
 - If your shell exports `SETUPTOOLS_USE_DISTUTILS=stdlib` (some shared environments do), setuptools will refuse to install a working distutils shim. `experiments/_shared/native_frameworks.py` normalizes this back to `local` when it loads, and the vLLM servers it spawns inherit the same setting, so no manual workaround is needed.
 - vLLM 0.23 removed the CLI flags that DataTrove 0.9.0's bundled `VLLMServer` passes, which is why every vLLM-backed path spawns its own `vllm serve` (current flags) instead of using a framework-managed server. The server also requires a real `vllm` executable on `PATH` (or `<venv>/bin/vllm`); `python -m vllm` does not work in vLLM 0.23.
 - The workload and model are read from the Hugging Face cache. Pre-cache `Qwen/Qwen3-4B` in each environment (or point `HF_HOME` at a shared cache) before running so the first shard does not download.
+- Distilabel 1.5.3 targets the pre-msgspec vLLM `SamplingParams` API (`logits_processors=...`) and expects `LLMEngine.model_executor`, both removed in vLLM >= 0.27. Pin `vllm==0.10.2` with `transformers==4.57.6` (newer transformers removed `all_special_tokens_extended`, which vLLM 0.10.2's tokenizer cache reads). Distilabel also caches pipeline runs by default, so the wrapper passes `use_cache=False`.
+- NeMo Curator needs a real `vllm` executable for its locally spawned server (the `nemo_curator_uv_requirements.txt` files include `vllm`).
 
 ### 6.3 Run a point
 
@@ -295,7 +297,23 @@ Output rows are one JSON line per workload row with the contract fields `stable_
 
 ### 6.5 Verification status
 
-Smoke runs on one H100 exercised the full path (worker subprocess, GPU inference, merge, validation, aggregation) for the DataTrove and raw SGLang scaling points, and for the DataTrove ChartQA pipeline (see `experiments/nemo_curator_comparison/README.md`). The 2-GPU and 4-GPU points are the same code path with more shard workers and require 2 and 4 visible GPUs respectively. The NeMo Curator, Distilabel, and Ray Data LLM backends follow the identical orchestrator path but have not been GPU smoke-run.
+Smoke runs on one H100 exercised the full path (worker subprocess, GPU inference, merge, validation, aggregation) for all five native scaling points, with `validation=PASS` for each:
+
+| Framework | Smoke result |
+|---|---|
+| raw SGLang | PASS (8 rows, ~52 s) |
+| DataTrove | PASS (8 rows, ~67 s) |
+| Ray Data LLM | PASS (8 rows, ~231 s) |
+| Distilabel | PASS (8 rows, ~83 s) |
+| NeMo Curator | PASS (8 rows, ~185 s) |
+
+Full sweep status: all five frameworks were verified on a 200-row workload across the 1-, 2-, and 4-GPU points (one repetition each), `validation=PASS` for all 15 runs (see `results/native_competitors/<framework>/runs/gpu_<N>/rep_01/validation.json`). The 2-GPU and 4-GPU points are the same code path with more shard workers and require 2 and 4 visible GPUs respectively.
+
+Notes on the verified Distilabel configuration (`run_distilabel` in `experiments/_shared/native_frameworks.py`):
+- `VLLM_USE_V1=0` forces the vLLM 0.10.2 V0 engine. The V1 multiprocess engine duplicates weights/KV cache between the driver and engine-core processes, which OOMs on 80 GiB H100s (each process alone peaks at ~60-78 GiB).
+- `disable_cuda_device_placement=True` turns off Distilabel's `CudaDevicePlacementMixin`. With `cuda_devices="auto"` it races over a shared lock file in `/tmp` across concurrent shard workers, mis-assigning GPUs and causing random "Failed to load all the steps" failures. `CUDA_VISIBLE_DEVICES` (set by the orchestrator per shard) is the correct isolation mechanism.
+- `extra_kwargs`: `gpu_memory_utilization=0.9`, `max_model_len=8192`, `enforce_eager=True`. The model's default `max_model_len` (40960) inflates the attention/CUDA-graph workspace (~38 GiB of "non-torch memory") so much that no KV cache remains; capping `max_model_len` and disabling CUDA graphs keeps the in-process engine within budget.
+- Each shard worker sets `DISTILABEL_CACHE_DIR` to its own per-shard directory (`native_shard_worker.py`). Distilabel derives its pipeline cache location deterministically from the pipeline config, so concurrent shard workers would otherwise share one directory and race on the `use_cache=False` cache wipe (`shutil.rmtree` → `FileNotFoundError`).
 
 ## Common Failures
 
@@ -303,6 +321,8 @@ Smoke runs on one H100 exercised the full path (worker subprocess, GPU inference
 |---|---|---|
 | 4-GPU wrapper fails immediately | Fewer than four visible CUDA devices. | Run `nvidia-smi` and start the job in a pod with four visible H100s. |
 | A point refuses to rerun | Existing `runs/gpu_<N>/rep_<R>/` directories are present. | Use a fresh `results/` directory or pass `--overwrite` for the point being replaced. |
+| A run right after another fails with "Free memory on device ... less than desired GPU memory utilization" or a Distilabel worker "Failed to load all the steps" | Leftover vLLM/Ray processes from a just-finished run still hold GPU memory (Ray teardown can lag tens of seconds). | Confirm all GPUs are at ~4 MiB and no vLLM/Ray processes remain before launching the next run. |
+| NeMo shard fails at engine warmup with `Ninja build failed` / `partially initialized module 'io'` | vLLM's FlashInfer JIT build subprocess imported `experiments/_shared/io.py`, which shadowed the stdlib `io` module via `PYTHONPATH`. | The helper was renamed to `experiments/_shared/fileio.py`. Do not add top-level modules named like stdlib packages under `experiments/_shared/`. |
 | A shard fails and `failed_launch.json` appears | Worker process exited nonzero. | Inspect `runs/gpu_<N>/rep_<R>/logs/` and the shard `state/` directories. |
 | Results are noisy or efficiency is unexpectedly low | Shared-node interference, wrong GPU type, or different workload size. | Record `experiment_metadata.json`, verify H100 devices, and keep workload metadata with the result. |
 | Plot files are missing | `matplotlib` is unavailable or plotting failed after summary generation. | Install `matplotlib` and rerun `scripts/plot.py` from `summary.csv`. |

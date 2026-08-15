@@ -3,3 +3,4 @@ data-designer==0.5.5
 datasets
 pandas
 pyarrow
+vllm
