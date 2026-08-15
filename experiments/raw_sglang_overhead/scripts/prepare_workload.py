@@ -5,16 +5,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from datasets import load_dataset
-from transformers import AutoTokenizer
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from datasets import load_dataset  # noqa: E402
+from experiments._shared.sizes import default_size  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
 
 DEFAULT_DATASET = "simplescaling/s1K-1.1"
 DEFAULT_SPLIT = "train"
 DEFAULT_MODEL = "Qwen/Qwen3-4B"
+EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROMPT_TEXT_TEMPLATE = (
     "<|im_start|>user\n{question}\n<|im_end|>\n"
     "<|im_start|>assistant\n<think>\n\n</think>\n"
@@ -29,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-revision", default=None)
     parser.add_argument("--model-path", default=DEFAULT_MODEL)
     parser.add_argument("--model-revision", default=None)
-    parser.add_argument("--num-rows", type=int, default=1000)
+    parser.add_argument("--num-rows", type=int, default=default_size(EXPERIMENT_DIR, "num_rows", 1000))
     parser.add_argument("--warmup-rows", type=int, default=16)
     parser.add_argument("--start-index", type=int, default=0)
     return parser.parse_args()
@@ -65,11 +72,14 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    dataset_revision = resolved_revision(args.dataset, "dataset", args.dataset_revision)
+    model_revision = resolved_revision(args.model_path, "model", args.model_revision)
+
     total_rows = args.num_rows + args.warmup_rows
     ds = load_dataset(
         args.dataset,
         split=f"{args.split}[{args.start_index}:{args.start_index + total_rows}]",
-        revision=args.dataset_revision,
+        revision=dataset_revision,
     )
     if len(ds) < args.num_rows:
         raise RuntimeError(
@@ -78,7 +88,7 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_path,
-        revision=args.model_revision,
+        revision=model_revision,
         trust_remote_code=True,
     )
 
@@ -117,14 +127,10 @@ def main() -> None:
         "dataset": args.dataset,
         "split": args.split,
         "dataset_revision_requested": args.dataset_revision,
-        "dataset_revision_resolved": resolved_revision(
-            args.dataset, "dataset", args.dataset_revision
-        ),
+        "dataset_revision_resolved": dataset_revision,
         "model_path": args.model_path,
         "model_revision_requested": args.model_revision,
-        "model_revision_resolved": resolved_revision(
-            args.model_path, "model", args.model_revision
-        ),
+        "model_revision_resolved": model_revision,
         "start_index": args.start_index,
         "num_rows": args.num_rows,
         "warmup_rows": args.warmup_rows,

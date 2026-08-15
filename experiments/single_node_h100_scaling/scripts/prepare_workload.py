@@ -6,16 +6,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from datasets import load_dataset
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from datasets import load_dataset  # noqa: E402
+from experiments._shared.sizes import default_size  # noqa: E402
 
 DEFAULT_DATASET = "HuggingFaceH4/ultrachat_200k"
 DEFAULT_SPLIT = "train_sft"
 DEFAULT_MODEL = "Qwen/Qwen3-4B"
-DEFAULT_NUM_ROWS = 30_000
+EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_NUM_ROWS = default_size(EXPERIMENT_DIR, "num_rows", 20_000)
 DEFAULT_SEED = 20260813
 
 
@@ -104,7 +111,7 @@ def main() -> None:
     dataset_revision = resolved_revision(args.dataset, "dataset", args.dataset_revision)
     model_revision = resolved_revision(args.model_path, "model", args.model_revision)
 
-    ds = load_dataset(args.dataset, split=args.split, revision=args.dataset_revision)
+    ds = load_dataset(args.dataset, split=args.split, revision=dataset_revision)
     if args.seed >= 0:
         ds = ds.shuffle(seed=args.seed)
 
